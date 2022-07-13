@@ -7,6 +7,7 @@ module.exports = {
   output: {
     path: __dirname,  // path to output files
     filename: './dist/readmat.min.js',
-	library: 'mat5'
-  }
+	  library: 'mat5'
+  },
+  devtool: 'source-map'
 }
