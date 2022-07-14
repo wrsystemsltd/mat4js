@@ -1,10 +1,50 @@
 var pako = require("pako/lib/inflate");
 
-export function read(data) {
-	function readDataElem(data, index) {
-		var type, length, taglength;
-		var view = new DataView(data);
+let WILDCARD = Symbol('readmat_wildcard');
 
+function read(data, filter) {
+	function isFiltered(filter, name) {
+		if (filter === undefined) {
+			return false;
+		}
+
+		if (typeof filter === "boolean") {
+			return !filter;
+		}
+
+		if (name !== undefined && filter[name] !== undefined) {
+			if (typeof filter[name] === "boolean") {
+				return !filter[name];
+			} else {
+				return false; // it should be a nested object, which implies it is not filtered out
+			}
+		}
+
+		if (filter[WILDCARD] !== undefined) {
+			return !filter[WILDCARD];
+		}
+
+		return true;
+	}
+
+	function getChildFilter(filter, name) {
+		if (filter === undefined || typeof filter === "boolean") {
+			return filter;
+		}
+
+		if (filter[name] !== undefined) {
+			return filter[name];
+		}
+
+		if (filter[WILDCARD] !== undefined) {
+			return filter[WILDCARD];
+		}
+
+		return false;
+	}
+
+	function readDataElemHeader(view, index) {
+		let type, length, taglength, readlength;
 
 		// Checking the first two bytes for 0 (as per the docs) should not work, because
 		// 1) length and type are not reversed as they should be for the small format,
@@ -27,7 +67,24 @@ export function read(data) {
 			taglength = 4;
 		}
 
-		var read = { type: type, length: round8byte(length + taglength) }; // Uncompressed data is padded
+		if (type === 15) {
+			readlength = length + taglength; // compressed data
+		} else {
+			readlength = round8byte(length + taglength); // Uncompressed data is padded
+		}
+
+		return { type, length, taglength, readlength };
+	}
+
+	function readDataElem(data, index, filter) {
+		const view = new DataView(data);
+		const header = readDataElemHeader(view, index);
+		
+		const type = header.type;
+		const length = header.length;
+		const taglength = header.taglength;
+		const read = { type: header.type, length: header.readlength };
+
 		switch (type) {
 			case 1: // int8
 				var arr = [];
@@ -153,6 +210,11 @@ export function read(data) {
 				for (var i = 0; i < nameArr.data.length; i++) {
 					name += String.fromCharCode(nameArr.data[i]);
 				}
+
+				if (isFiltered(filter, name)) {
+					return read;
+				}
+		
 				reader += nameArr.length;
 
 				// Arr data
@@ -194,7 +256,7 @@ export function read(data) {
 							}
 						}
 						for (var i = 0; i < elemNum; i++) {
-							var subArr = readDataElem(data, reader);
+							var subArr = readDataElem(data, reader, getChildFilter(filter, name));
 							flat.push(subArr.data);
 							reader += subArr.length;
 						}
@@ -215,6 +277,8 @@ export function read(data) {
 							}
 						}
 
+						const child_filter = getChildFilter(filter, name);
+
 						// Structs can be defined as scalar (1x1) or not regardless of the presence of cell arrays in the data
 						if (dim.data[0] != 1 || dim.data.length > 1) {
 							var flat = [];
@@ -229,18 +293,30 @@ export function read(data) {
 							for (var i = 0; i < elemNum; i++) {
 								var cell = {};
 								for (var j = 0; j < fieldNames.length; j++) {
-									var field = readDataElem(data, reader);
-									reader += field.length;
-									cell[fieldNames[j]] = field.data;
+									let child_field_filter = getChildFilter(child_filter, fieldNames[i]);
+
+									if (isFiltered(child_field_filter)) {
+										reader += readDataElemHeader(view, reader).readlength;
+									} else {
+										var field = readDataElem(data, reader, child_filter);
+										reader += field.length;
+										cell[fieldNames[j]] = field.data;
+									}									
 								}
 								flat.push(cell);
 							}
 							arrData = iterateN(dim.data, flat);
 						} else {
 							for (var i = 0; i < fieldNames.length; i++) {
-								var field = readDataElem(data, reader);
-								reader += field.length;
-								arrData[fieldNames[i]] = field.data;
+								let child_field_filter = getChildFilter(child_filter, fieldNames[i]);
+
+								if (isFiltered(child_field_filter)) {
+									reader += readDataElemHeader(view, reader).readlength;
+								} else {
+									var field = readDataElem(data, reader, child_field_filter);
+									reader += field.length;
+									arrData[fieldNames[i]] = field.data;
+								}
 							}
 						}
 						break;
@@ -327,7 +403,7 @@ export function read(data) {
 			case 15: // compressed
 				var compressed = new Uint8Array(data.slice(index + taglength, index + taglength + length));
 				var inflate = pako.inflate(compressed);
-				var plain = readDataElem(inflate.buffer, 0);
+				var plain = readDataElem(inflate.buffer, 0, filter);
 				//var plain = readDataElem(inflate.decompress().buffer, 0);
 				if (plain.hasOwnProperty('data')) read.data = plain.data;
 				if (plain.hasOwnProperty('name')) read.name = plain.name;
@@ -394,7 +470,7 @@ export function read(data) {
 
 	var index = 128;
 	while (index < data.byteLength) {
-		var elem = readDataElem(data, index);
+		var elem = readDataElem(data, index, filter);
 		if (elem.hasOwnProperty('name')) output.data[elem.name] = elem.data;
 
 		index += elem.length;
@@ -431,4 +507,9 @@ class FeatureError extends Error {
 		this.byte = byte;
 		this.feature = feature;
 	}
+}
+
+module.exports = {
+	WILDCARD,
+	read
 }

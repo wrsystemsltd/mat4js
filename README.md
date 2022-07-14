@@ -9,8 +9,41 @@ The recommended way is to download `dist/readmat.min.js` to your webserver and i
 ```
 
 ## Read
-Use `mat5.read(ArrayBuffer)`.
+Use `mat5.read(data [, filter])`.
 
+### Arguments
+
+#### `data`
+
+Required.  The `data` argument is of type `ArrayBuffer`, which contains the full MAT file contents.
+
+#### `filter`
+
+Optional.  The `filter` argument is an object literal that can be used to read only the specified parts of the MAT file.  If not provided, the full MAT file is read. The structure of the object is:
+
+```javascript
+    {
+        rootVar1: true,
+        rootVar2: false,
+        rootVar3: {
+            structVar1: true,
+            structVar2: false,
+            structVar3: { /* nested struct filter */ },
+            [mat5.WILDCARD]: true
+        },
+        [mat5.WILDCARD]: true
+    }
+```
+
+The filter rules are:
+* The `mat5.WILDCARD` symbol can be used to set the default inclusion behavior. If set to `true`, then all elements at that level are implicitly *included*.  If set to `false` or left off entirely, then all elements at that level are implicitly *excluded*.
+* When `WILDCARD` is `true`, you can explicitly *exclude* elements by specifying their name and a value of `false`.
+* When `WILDCARD` is `false` (either explicitly or implicitly), you can explicitly *include* elements by specifying their name and a value of `true`.
+* If an element that you are including is a struct array, you can optionally provide a nested filter to further limit which elements in the struct are read.
+* Each nested filter has its own inclusion/exclusion policy, which follow the same rules as above.  In other words, child filters do not inherit their parent's policy.
+
+
+### Return Value
 It returns a JavaScript object with a `.header` and `.data` property.
 
 #### `.header`
